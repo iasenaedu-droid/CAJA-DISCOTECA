@@ -112,6 +112,18 @@
     background: var(--tarjeta2); color: var(--texto); font-size: 24px; font-weight: 700; }
   .stepper .num { background: transparent; width: 42px; font-size: 20px; }
 
+  /* La búsqueda se queda pegada arriba al bajar por la lista, para no tener que volver a subir */
+  .buscador { position: sticky; top: calc(48px + env(safe-area-inset-top)); z-index: 5;
+    background: var(--fondo); padding: 8px 0; margin-bottom: 4px; }
+  .buscador .caja-busqueda { position: relative; }
+  .buscador input { padding-left: 40px; padding-right: 44px; }
+  .buscador svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 20px; height: 20px; fill: none; stroke: var(--suave); stroke-width: 2; stroke-linecap: round; }
+  .buscador .limpiar { position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    width: 38px; height: 38px; border: 0; border-radius: 8px; background: none;
+    color: var(--suave); font-size: 22px; }
+  .producto.oculto { display: none; }
+
   .barra-total { position: fixed; left: 0; right: 0; z-index: 9;
     bottom: calc(var(--nav) + env(safe-area-inset-bottom));
     background: var(--tarjeta); border-top: 1px solid var(--borde); }
@@ -295,9 +307,12 @@ function calcularNoche() {
     const base = c.base[m.id] || 0;
     return { nombre: m.nombre, bebidas: bebidasM, vendido, base, entregar: vendido + base };
   });
+  const egresos = (c.egresos || []).map(e => ({ ...e }));
+  const ventas = bebidas.reduce((s, b) => s + b.ventas, 0);
+  const totalEgresos = egresos.reduce((s, e) => s + e.valor, 0);
   return {
     apertura: c.apertura,
-    bebidas, meseros,
+    bebidas, meseros, egresos,
     ordenes: datos.ordenes.map(o => ({
       num: o.num, fecha: o.fecha, mesa: o.mesa, mesero: nombreMesero(o.meseroId),
       items: o.items.map(l => ({ nombre: l.nombre, precio: l.precio, cant: l.cant }))
@@ -305,9 +320,11 @@ function calcularNoche() {
     totales: {
       ordenes: datos.ordenes.length,
       bebidas: bebidas.reduce((s, b) => s + b.vendidas, 0),
-      ventas: bebidas.reduce((s, b) => s + b.ventas, 0),
+      ventas,
       base: meseros.reduce((s, m) => s + m.base, 0),
-      entregar: meseros.reduce((s, m) => s + m.entregar, 0)
+      entregar: meseros.reduce((s, m) => s + m.entregar, 0),
+      egresos: totalEgresos,
+      neto: ventas - totalEgresos
     }
   };
 }
@@ -418,7 +435,7 @@ const borradorVacio = () => ({ mesa: '', meseroId: null, cant: {}, corrigiendo: 
 let borrador = borradorVacio();
 
 // A qué botón del menú de abajo pertenece cada pantalla
-const MENU_DE = { apertura: 'inicio', noche: 'ajustes' };
+const MENU_DE = { apertura: 'inicio', cierre: 'inicio', noche: 'ajustes' };
 
 function ir(nombre, param = null) {
   pantalla = nombre;
@@ -431,6 +448,8 @@ function render() {
   const vista = document.getElementById('vista');
   vista.innerHTML = PANTALLAS[pantalla]();
   vista.className = pantalla === 'orden' && datos.caja.abierta ? 'con-barra' : '';
+  // Si se vuelve a la orden con algo escrito en la búsqueda, se respeta el orden por parecido
+  if (pantalla === 'orden' && datos.caja.abierta) filtrarProductos();
   const activo = MENU_DE[pantalla] || pantalla;
   document.querySelectorAll('#menu button').forEach(b => b.classList.toggle('activo', b.dataset.destino === activo));
   const pill = document.getElementById('estado');
@@ -480,7 +499,7 @@ const PANTALLAS = {
       <p class="suave">Caja abierta desde ${fechaLarga(c.apertura)}</p>
       <div class="fila-btns">
         <button class="btn borde" data-accion="ir" data-destino="apertura">Editar apertura</button>
-        <button class="btn rojo" data-accion="cierre">CIERRE DE CAJA</button>
+        <button class="btn rojo" data-accion="ir" data-destino="cierre">CIERRE DE CAJA</button>
       </div>`;
   },
 
@@ -532,7 +551,16 @@ const PANTALLAS = {
         </div>
       </div>
       <div class="seccion">Bebidas</div>
+      <div class="buscador">
+        <div class="caja-busqueda">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <input id="buscar" type="search" data-campo="buscar" value="${esc(busqueda)}" placeholder="Buscar bebida…"
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+          <button class="limpiar" data-accion="limpiarBusqueda" aria-label="Borrar búsqueda" ${busqueda ? '' : 'hidden'}>×</button>
+        </div>
+      </div>
       ${datos.catalogo.map(filaProductoHtml).join('')}
+      <p id="sinResultados" class="suave centro" ${hayResultados() ? 'hidden' : ''}>No se encontró ninguna bebida con "<span>${esc(busqueda)}</span>".</p>
       <div class="barra-total"><div>
         <div><span class="suave">Total</span><b id="totalOrden">${dinero(totalBorrador())}</b></div>
         <button class="btn verde" data-accion="registrar">${b.corrigiendo ? 'GUARDAR CORRECCIÓN' : 'REGISTRAR ORDEN'}</button>
@@ -616,6 +644,7 @@ const PANTALLAS = {
             <div><b>${fechaLarga(n.cierre)}</b><div class="suave">${n.totales.ordenes} órdenes · ${n.totales.bebidas} bebidas</div></div>
             <b>${dinero(n.totales.ventas)}</b>
           </div>`).join('') || '<p class="suave">Aún no hay cierres de caja. Cada cierre se guarda aquí.</p>'}
+        ${datos.historial.length ? `<button class="btn borde bloque" style="color:var(--rojo);margin-top:10px" data-accion="borrarHistorial">Borrar historial</button>` : ''}
       </div>
 
       <div class="seccion">Copia de seguridad</div>
@@ -628,9 +657,44 @@ const PANTALLAS = {
       </div>`;
   },
 
+  cierre() {
+    if (!datos.caja.abierta) return cajaCerradaHtml();
+    const r = calcularNoche();
+    return `
+      <h2>Cierre de caja</h2>
+      <p class="suave">Antes de cerrar, anota los egresos de la noche: el dinero que salió de la caja, como el pago al DJ o un descuento de caja.</p>
+      <div class="stats">
+        <div class="stat"><span>Ventas totales</span><b>${dinero(r.totales.ventas)}</b></div>
+        <div class="stat"><span>Egresos</span><b>${dinero(r.totales.egresos)}</b></div>
+        <div class="stat ancho"><span>Neto (ventas − egresos)</span><b>${dinero(r.totales.neto)}</b></div>
+      </div>
+      <div class="seccion">Egresos imprevistos</div>
+      <div class="tarjeta">
+        ${r.egresos.map(e => `
+          <div class="lista-item">
+            <div><b>${esc(e.concepto)}</b><div class="suave">${hora(e.fecha)}</div></div>
+            <div class="acciones"><b style="align-self:center">${dinero(e.valor)}</b>
+              <button class="btn borde chico" data-accion="quitarEgreso" data-id="${e.id}">Quitar</button></div>
+          </div>`).join('') || '<p class="suave">No hay egresos anotados.</p>'}
+        <div class="chips" style="margin:14px 0 10px">
+          ${['Pago DJ', 'Descuento de caja'].map(c => `<button class="chip" data-accion="conceptoRapido" data-c="${c}">${c}</button>`).join('')}
+        </div>
+        <label class="campo"><span>Concepto</span><input id="egConcepto" placeholder="Ej: Pago DJ" autocomplete="off"></label>
+        <label class="campo"><span>Valor ($)</span><input id="egValor" inputmode="numeric" placeholder="Ej: 150000" autocomplete="off"></label>
+        <button class="btn verde bloque" data-accion="agregarEgreso">+ Agregar egreso</button>
+      </div>
+      <div class="fila-btns">
+        <button class="btn borde" data-accion="ir" data-destino="inicio">Volver</button>
+        <button class="btn rojo" data-accion="confirmarCierre">CERRAR CAJA</button>
+      </div>`;
+  },
+
   noche() {
     const n = datos.historial.find(h => h.id === parametro);
     if (!n) return '<p>Esa noche no existe.</p>';
+    // Las noches cerradas antes de existir los egresos no los tienen guardados
+    const egresos = n.egresos || [];
+    const totalEgresos = n.totales.egresos || 0;
     return `
       <button class="btn borde chico no-imprimir" data-accion="ir" data-destino="ajustes">← Volver</button>
       <h2 style="margin-top:12px">Cierre de caja</h2>
@@ -641,7 +705,16 @@ const PANTALLAS = {
         <div class="stat"><span>Bebidas vendidas</span><b>${n.totales.bebidas}</b></div>
         <div class="stat"><span>Base entregada</span><b>${dinero(n.totales.base)}</b></div>
         <div class="stat"><span>Total vendido por meseros</span><b>${dinero(n.totales.entregar)}</b></div>
+        <div class="stat"><span>Egresos</span><b>${dinero(totalEgresos)}</b></div>
+        <div class="stat"><span>Neto (ventas − egresos)</span><b>${dinero(n.totales.ventas - totalEgresos)}</b></div>
       </div>
+      ${egresos.length ? `
+        <div class="seccion">Egresos</div>
+        <div class="tarjeta"><div class="tabla-scroll"><table>
+          <thead><tr><th>Concepto</th><th>Hora</th><th>Valor</th></tr></thead>
+          <tbody>${egresos.map(e => `<tr><td>${esc(e.concepto)}</td><td>${hora(e.fecha)}</td><td>${dinero(e.valor)}</td></tr>`).join('')}</tbody>
+          <tfoot><tr><td>TOTAL</td><td></td><td>${dinero(totalEgresos)}</td></tr></tfoot>
+        </table></div></div>` : ''}
       <div class="seccion">Inventario</div>
       <div class="tarjeta">${tablaInventario(n)}</div>
       <div class="seccion">Meseros</div>
@@ -650,7 +723,8 @@ const PANTALLAS = {
         <button class="btn borde" data-accion="compartirNoche" data-id="${n.id}">Compartir resumen</button>
         <button class="btn borde" data-accion="csvNoche" data-id="${n.id}">Exportar a Excel (CSV)</button>
         <button class="btn borde" data-accion="imprimir">Imprimir / PDF</button>
-      </div>`;
+      </div>
+      <button class="btn borde bloque no-imprimir" style="color:var(--rojo);margin-top:8px" data-accion="eliminarNoche" data-id="${n.id}">Eliminar esta noche del historial</button>`;
   }
 };
 
@@ -665,7 +739,7 @@ function filaProductoHtml(p) {
   const hay = disponible(p.id, borrador.corrigiendo);
   const clase = cant > hay ? 'rojo-txt' : hay <= 5 ? 'naranja-txt' : '';
   return `
-    <div class="producto ${cant ? 'con-cant' : ''}" id="fila-${p.id}">
+    <div class="producto ${cant ? 'con-cant' : ''} ${coincideBusqueda(p) ? '' : 'oculto'}" id="fila-${p.id}">
       <div class="info">
         <b>${esc(p.nombre)}</b>
         <span class="suave">${dinero(p.precio)} · <span class="${clase}">hay ${hay}</span></span>
@@ -676,6 +750,99 @@ function filaProductoHtml(p) {
         <button data-accion="mas" data-id="${p.id}" aria-label="Agregar uno">+</button>
       </div>
     </div>`;
+}
+
+/* ---------- BÚSQUEDA DE BEBIDAS ----------
+   Busca "por cómo suena" y no letra por letra, para que los errores
+   comunes al escribir rápido no impidan encontrar el producto:
+   serveza → cerveza, bodka → vodka, coctel → cóctel, agardiente → aguardiente. */
+
+let busqueda = '';
+
+// Minúsculas y sin tildes: "Cóctel" → "coctel"
+function normalizar(t) {
+  return String(t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Escribe la palabra como suena en español, así las letras que suenan
+// igual cuentan como la misma: s/z/c, b/v, y/ll, k/qu/c, j/g, h muda.
+function sonido(t) {
+  return normalizar(t)
+    .replace(/ch/g, '#')                        // se protege la "ch" para no tocarla
+    .replace(/h/g, '')                          // la h no suena
+    .replace(/qu/g, 'k').replace(/c([ei])/g, 's$1').replace(/c/g, 'k')
+    .replace(/z/g, 's').replace(/[vw]/g, 'b')
+    .replace(/ll/g, 'y').replace(/g([ei])/g, 'j$1')
+    .replace(/#/g, 'ch')
+    .replace(/([a-z])\1+/g, '$1');              // letras repetidas: "cerbeeesa"
+}
+
+// Cuántas letras hay que cambiar, quitar o poner para pasar de una palabra a otra
+function distancia(a, b) {
+  let previa = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const actual = [i];
+    for (let j = 1; j <= b.length; j++) {
+      actual[j] = Math.min(previa[j] + 1, actual[j - 1] + 1, previa[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    previa = actual;
+  }
+  return previa[b.length];
+}
+
+// Qué tanto se parece lo buscado a una palabra del nombre.
+// Menos es mejor: 0 = igual, 1 = empieza igual, 2 = la contiene, 3 = con errores.
+// null = no se parece.
+function parecidoPalabra(q, palabra) {
+  if (palabra === q) return 0;
+  if (palabra.startsWith(q)) return 1;
+  if (q.length >= 3 && palabra.includes(q)) return 2;
+  // Errores de tecleo: se permiten más mientras más larga es la palabra.
+  // Con 3 letras o menos no, porque casi todo se parecería a todo.
+  const tolerancia = q.length <= 3 ? 0 : q.length <= 5 ? 1 : 2;
+  if (!tolerancia) return null;
+  // Se compara con el comienzo de la palabra, para que funcione mientras se escribe ("serbe" → "cerveza")
+  for (let n = q.length - 1; n <= q.length + 1; n++) {
+    if (distancia(q, palabra.slice(0, n)) <= tolerancia) return 3;
+  }
+  return null;
+}
+
+function puntajeBusqueda(p) {
+  const consulta = sonido(busqueda).split(' ').filter(Boolean);
+  if (!consulta.length) return 0;
+  const palabras = sonido(p.nombre).split(' ');
+  // Cada palabra buscada debe parecerse a alguna palabra del nombre
+  let total = 0;
+  for (const q of consulta) {
+    const mejores = palabras.map(w => parecidoPalabra(q, w)).filter(x => x !== null);
+    if (!mejores.length) return null;
+    total += Math.min(...mejores);
+  }
+  return total;
+}
+
+const coincideBusqueda = p => puntajeBusqueda(p) !== null;
+const hayResultados = () => datos.catalogo.some(coincideBusqueda);
+
+// Se ocultan/muestran y reordenan las filas sin redibujar la pantalla,
+// para no perder las cantidades ni el teclado abierto.
+function filtrarProductos() {
+  const puntajes = new Map(datos.catalogo.map(p => [p.id, puntajeBusqueda(p)]));
+  // Lo más parecido arriba ("agua" muestra primero Agua y después los aguardientes)
+  const orden = datos.catalogo.slice().sort((a, b) => (puntajes.get(a.id) ?? 99) - (puntajes.get(b.id) ?? 99));
+  const sin = document.getElementById('sinResultados');
+  for (const p of orden) {
+    const fila = document.getElementById('fila-' + p.id);
+    if (!fila) continue;
+    fila.classList.toggle('oculto', puntajes.get(p.id) === null);
+    sin.before(fila); // las va poniendo en orden, justo antes del mensaje "no se encontró"
+  }
+  sin.hidden = hayResultados();
+  sin.querySelector('span').textContent = busqueda;
+  const limpiar = document.querySelector('[data-accion="limpiarBusqueda"]');
+  if (limpiar) limpiar.hidden = !busqueda;
 }
 
 function totalBorrador() {
@@ -739,7 +906,11 @@ const ACCIONES = {
       base[m.id] = entero(document.querySelector(`[data-base="${m.id}"]`).value) || 0;
     }
     const yaAbierta = datos.caja.abierta;
-    datos.caja = { abierta: true, apertura: yaAbierta ? datos.caja.apertura : new Date().toISOString(), stock, base };
+    datos.caja = {
+      abierta: true, apertura: yaAbierta ? datos.caja.apertura : new Date().toISOString(), stock, base,
+      // Al editar la apertura se conservan los egresos ya anotados
+      egresos: yaAbierta ? (datos.caja.egresos || []) : []
+    };
     if (!yaAbierta) datos.ordenes = [];
     guardar();
     toast(yaAbierta ? 'Apertura actualizada' : 'Caja abierta');
@@ -750,6 +921,7 @@ const ACCIONES = {
   nuevaOrden() {
     if (!datos.caja.abierta) return aviso('Primero debes abrir la caja.');
     if (borrador.corrigiendo) borrador = borradorVacio();
+    busqueda = '';
     ir('orden');
   },
 
@@ -806,6 +978,7 @@ const ACCIONES = {
     const eraCorreccion = !!b.corrigiendo;
     toast(`Orden #${num} ${eraCorreccion ? 'corregida' : 'registrada'} · ${dinero(total)}`);
     borrador = borradorVacio();
+    busqueda = '';
     ir(eraCorreccion ? 'registro' : 'orden');
   },
 
@@ -845,20 +1018,82 @@ const ACCIONES = {
   filtrar(d) { filtroMesero = d.id; render(); },
   pestana(d) { pestanaReporte = d.p; render(); },
 
-  /* ---------- CIERRE DE CAJA ---------- */
-  async cierre() {
-    if (!await confirmar('Cierre de caja',
-      '<p>Se guarda el resumen de la noche en el historial y la caja queda limpia para la siguiente noche.</p>', 'Cerrar caja')) return;
+  limpiarBusqueda() {
+    busqueda = '';
+    const input = document.getElementById('buscar');
+    input.value = '';
+    filtrarProductos();
+    input.focus();
+  },
+
+  /* ---------- CIERRE DE CAJA Y EGRESOS ---------- */
+  conceptoRapido(d) {
+    document.getElementById('egConcepto').value = d.c;
+    document.getElementById('egValor').focus();
+  },
+
+  agregarEgreso() {
+    const concepto = document.getElementById('egConcepto').value.trim();
+    const valor = entero(document.getElementById('egValor').value);
+    if (!concepto) return aviso('Escribe el concepto del egreso (por ejemplo, Pago DJ).');
+    if (!valor) return aviso('Escribe el valor del egreso.');
+    // Se guarda en la caja abierta, así no se pierde si sales de la pantalla antes de cerrar
+    datos.caja.egresos = datos.caja.egresos || [];
+    datos.caja.egresos.push({ id: nuevoId(), concepto, valor, fecha: new Date().toISOString() });
+    guardar();
+    toast(`Egreso agregado · ${dinero(valor)}`);
+    render();
+  },
+
+  async quitarEgreso(d) {
+    const e = datos.caja.egresos.find(x => x.id === d.id);
+    if (!await confirmar('¿Quitar este egreso?', `<p>${esc(e.concepto)} · ${dinero(e.valor)}</p>`, 'Quitar')) return;
+    datos.caja.egresos = datos.caja.egresos.filter(x => x.id !== d.id);
+    guardar();
+    render();
+  },
+
+  async confirmarCierre() {
+    // Si dejó un egreso escrito sin pulsar "Agregar", se le avisa para que no se pierda
+    if (document.getElementById('egConcepto').value.trim() || document.getElementById('egValor').value.trim()) {
+      return aviso('Escribiste un egreso pero no lo agregaste. Pulsa "+ Agregar egreso" o borra lo escrito antes de cerrar.');
+    }
+    const r = calcularNoche();
+    if (!await confirmar('¿Cerrar la caja?',
+      `<p>Ventas: <b>${dinero(r.totales.ventas)}</b><br>Egresos: <b>${dinero(r.totales.egresos)}</b><br>Neto: <b>${dinero(r.totales.neto)}</b></p>
+       <p class="suave">Se guarda el resumen en el historial y la caja queda limpia para la siguiente noche.</p>`, 'Cerrar caja')) return;
     const n = calcularNoche();
     n.id = nuevoId();
     n.cierre = new Date().toISOString();
     datos.historial.unshift(n);
-    datos.caja = { abierta: false, apertura: null, stock: {}, base: {} };
+    datos.caja = { abierta: false, apertura: null, stock: {}, base: {}, egresos: [] };
     datos.ordenes = [];
     borrador = borradorVacio();
     guardar();
     toast('Caja cerrada y guardada en el historial');
     ir('noche', n.id);
+  },
+
+  /* ---------- HISTORIAL ---------- */
+  async eliminarNoche(d) {
+    const n = datos.historial.find(h => h.id === d.id);
+    if (!await confirmar('¿Eliminar esta noche del historial?',
+      `<p>${fechaLarga(n.cierre)} · ${dinero(n.totales.ventas)}</p><p class="suave">No se puede deshacer.</p>`, 'Eliminar')) return;
+    datos.historial = datos.historial.filter(h => h.id !== d.id);
+    guardar();
+    toast('Noche eliminada');
+    ir('ajustes');
+  },
+
+  async borrarHistorial() {
+    const total = datos.historial.length;
+    if (!await confirmar('¿Borrar todo el historial?',
+      `<p>Se borran los <b>${total}</b> cierres de caja guardados. <b>No se puede deshacer.</b></p>
+       <p class="suave">Si quieres conservarlos, primero pulsa "Guardar copia" en Copia de seguridad.</p>`, 'Borrar historial')) return;
+    datos.historial = [];
+    guardar();
+    toast('Historial borrado');
+    render();
   },
 
   verNoche: d => ir('noche', d.id),
@@ -966,6 +1201,8 @@ async function formularioMesero(m) {
 const hoyArchivo = () => new Date().toISOString().slice(0, 10);
 
 function textoResumen(n, titulo) {
+  const egresos = n.egresos || [];
+  const totalEgresos = n.totales.egresos || 0;
   const lineas = [
     `*${titulo}*`,
     n.cierre ? `Cierre: ${fechaLarga(n.cierre)}` : `Abierta desde: ${fechaLarga(n.apertura)}`,
@@ -973,6 +1210,13 @@ function textoResumen(n, titulo) {
     `Ventas totales: ${dinero(n.totales.ventas)}`,
     `Órdenes: ${n.totales.ordenes} · Bebidas: ${n.totales.bebidas}`,
     '',
+    ...(egresos.length ? [
+      '*Egresos*',
+      ...egresos.map(e => `${e.concepto}: ${dinero(e.valor)}`),
+      `Total egresos: ${dinero(totalEgresos)}`,
+      `NETO (ventas − egresos): ${dinero(n.totales.ventas - totalEgresos)}`,
+      ''
+    ] : []),
     '*Meseros (vendido + base = entregar)*',
     ...n.meseros.filter(m => m.bebidas || m.base).map(m => `${m.nombre}: ${dinero(m.vendido)} + ${dinero(m.base)} = ${dinero(m.entregar)}`),
     `TOTAL A ENTREGAR: ${dinero(n.totales.entregar)}`,
@@ -992,6 +1236,16 @@ function csvOrdenes(n) {
     // Hora en formato 24h (15:51): Excel no reconoce "03:51 p. m." como hora
     const h24 = new Date(o.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false });
     filas.push([o.num, fechaCorta(o.fecha), h24, o.mesa, o.mesero, l.nombre, l.cant, l.precio, l.cant * l.precio]);
+  }
+  // Los egresos van debajo de las órdenes, separados por una fila vacía
+  const egresos = n.egresos || [];
+  if (egresos.length) {
+    const totalEgresos = egresos.reduce((s, e) => s + e.valor, 0);
+    filas.push([], ['EGRESOS'], ['Concepto', 'Fecha', 'Hora', 'Valor']);
+    for (const e of egresos) {
+      filas.push([e.concepto, fechaCorta(e.fecha), new Date(e.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false }), e.valor]);
+    }
+    filas.push(['Total egresos', '', '', totalEgresos], ['Neto (ventas - egresos)', '', '', n.totales.ventas - totalEgresos]);
   }
   return '﻿' + filas.map(f => f.map(celda).join(';')).join('\r\n');
 }
@@ -1057,6 +1311,7 @@ document.addEventListener('click', e => {
 // cambiar de pantalla.
 document.addEventListener('input', e => {
   if (e.target.dataset.campo === 'mesa') borrador.mesa = e.target.value;
+  if (e.target.dataset.campo === 'buscar') { busqueda = e.target.value; filtrarProductos(); }
 });
 
 // El "service worker" guarda la app dentro del celular para que abra sin

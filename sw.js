@@ -4,7 +4,7 @@
 
 // IMPORTANTE: cada vez que cambies index.html, sube este número (v2, v3...).
 // Así el iPhone se entera de que hay versión nueva y la descarga.
-const VERSION = 'caja-v2';
+const VERSION = 'caja-v3';
 
 const ARCHIVOS = ['./', './index.html', './manifest.json', './icono-180.png', './icono-512.png'];
 
@@ -20,8 +20,19 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Primero busca en la copia guardada; si no está, va a internet
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // La página principal: si hay internet se trae la versión más nueva (y se
+  // guarda); si no hay, se usa la copia. Así los cambios llegan apenas se
+  // abre la app con internet, sin tener que abrirla dos veces.
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then(r => { const copia = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copia)); return r; })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+  // Lo demás (íconos, etc.) casi nunca cambia: primero la copia guardada
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(r => r || fetch(e.request)));
 });
